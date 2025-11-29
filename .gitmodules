@@ -13,6 +13,6 @@
 [submodule "3rd/minmea"]
     path = 3rd/minmea
     url = https://github.com/kosma/minmea.git
-[submodule "3rd/ouster-sdk"]
-	path = 3rd/ouster-sdk
-	url = https://github.com/ouster-lidar/ouster-sdk.git
+[submodule "external/rs_driver"]
+	path = external/rs_driver
+	url = https://github.com/RoboSense-LiDAR/rs_driver.git
