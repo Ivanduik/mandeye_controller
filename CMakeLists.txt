@@ -11,10 +11,10 @@ message(STATUS "Mandeye version is : ${MANDEYE_VERSION}")
 
 set(SYSTEM_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
 message("pistache")
-#pistache
-set(PISTACHE_BUILD_TESTS OFF CACHE BOOL "Disable Pistache tests")
-add_subdirectory(3rd/pistache)
 
+# pistache
+find_package(PkgConfig)
+pkg_check_modules(Pistache REQUIRED IMPORTED_TARGET libpistache)
 
 message("LASzip library")
 # LASzip library
@@ -29,17 +29,13 @@ message("JSON")
 #JSON
 include_directories(3rd/json)
 
+message("Livox SDK2")
+# Livox SDK2
+add_subdirectory(3rd/Livox-SDK2)
 
 
-# extras
-add_subdirectory(extras)
 
 include_directories(code/)
-
-set(MANDEYE_USE_OUSTER_SDK ON CACHE BOOL  "Use Ouster SDK ")
-set(MANDEYE_USE_LIVOX_SDK2 ON CACHE BOOL "Use Livox SDK (HAP/Mid360)")
-set(MANDEYE_USE_SICK ON CACHE BOOL "Use SICK SCAN XD SDK (Multiscan MRS1000), requires SICK SDK to be installed")
-
 
 # NMEA and libserial
 find_path(LIBSERIAL_INCLUDE_DIR SerialPort.h
@@ -77,82 +73,12 @@ configure_file(
 # Include the generated file in the project
 include_directories(${CMAKE_BINARY_DIR})
 #executable
-set(LIDAR_SOURCES
-    code/lidars/dummy/ButterLidar.cpp
-    code/lidars/LidarImplementation.cpp
-)
-set(LIDAR_LIBRARIES )
-
-if (${MANDEYE_USE_OUSTER_SDK})
-    # We need to separate the Ouster SDK from the main project to avoid conflicts with SPDLOG in LIVOX SDK2
-    message("Ouster SDK")
-    add_subdirectory(3rd/ouster-sdk)
-    add_executable(ouster_client_example code/lidars/ouster/ouster_client_example.cpp)
-    target_link_libraries(ouster_client_example PRIVATE OusterSDK::ouster_client)
-    
-    # Create isolated static library for Ouster integration
-    add_library(ouster_lib
-        code/lidars/ouster/OusterClient.cpp
-    )
-    target_link_libraries(ouster_lib PRIVATE OusterSDK::ouster_client)
-    target_include_directories(ouster_lib PRIVATE 3rd/ouster-sdk/ouster_client/include)
-    
-    list(APPEND LIDAR_LIBRARIES ouster_lib)
-    install(TARGETS ouster_lib LIBRARY DESTINATION /opt/mandeye/)
-    add_compile_definitions(MANDEYE_USE_OUSTER_SDK)
-endif ()
-
-if (${MANDEYE_USE_LIVOX_SDK2})
-    message("Livox SDK2")
-    # Livox SDK2
-
-    add_subdirectory(3rd/Livox-SDK2)
-    add_library(livox2_lib 
-            code/lidars/livoxsdk2/LivoxClient.cpp
-    )
-    target_link_libraries(livox2_lib PRIVATE livox_lidar_sdk_static)
-    target_include_directories(livox2_lib PRIVATE 3rd/Livox-SDK2/include)
-    install(TARGETS livox2_lib LIBRARY DESTINATION /opt/mandeye/)
-    list(APPEND LIDAR_LIBRARIES livox2_lib)
-    # add defines
-    add_compile_definitions(MANDEYE_USE_LIVOX_SDK2)
-endif()
-
-if (${MANDEYE_USE_SICK})
-    message("SICK SDK")
-    # SICK SDK
-    find_package(sick_scan_xd REQUIRED)
-    if (TARGET sick_scan_xd::sick_scan_xd_shared_lib)
-        add_executable(sick_client_example code/lidars/sick/sick_client_example.cpp)
-        target_link_libraries(sick_client_example PRIVATE sick_scan_xd::sick_scan_xd_shared_lib )
-
-        add_library(sick_lib
-            code/lidars/sick/SickClient.cpp
-        )
-        target_link_libraries(sick_lib PRIVATE sick_scan_xd::sick_scan_xd_shared_lib)
-        install(TARGETS sick_lib LIBRARY DESTINATION /opt/mandeye/)
-        list(APPEND LIDAR_LIBRARIES sick_lib)
-        add_compile_definitions(MANDEYE_USE_SICK)
-    else()
-        message(FATAL_ERROR "SICK SDK not found. Install SICK SDK to use this feature.")
-    endif()
-endif()
-
-add_executable(control_program code/main.cpp code/gnss.cpp code/web_page.h
-        ${LIDAR_SOURCES}
-        ${LIDAR_SOURCES}
-        code/gpios.cpp code/FileSystemClient.cpp code/save_laz.cpp
+add_executable(control_program code/main.cpp code/gnss.cpp code/web_page.h code/LivoxClient.cpp code/gpios.cpp code/FileSystemClient.cpp code/save_laz.cpp ${PISTACHE_SRC}
         code/utils/TimeStampReceiver.cpp code/publisher.cpp)
+set(CMAKE_CXX_LINK_FLAGS "${CMAKE_CXX_LINK_FLAGS} -latomic")
 
-set(CMAKE_CXX_LINK_FLAGS "${CMAKE_CXX_LINK_FLAGS} -latomic " )
+target_link_libraries(control_program pthread livox_lidar_sdk_static pistache atomic laszip ${LIBSERIAL_LIBRARY} minea gpiod zmq)
 
-
-target_link_libraries(control_program pthread ${LIDAR_LIBRARIES} pistache_static atomic laszip ${LIBSERIAL_LIBRARY} minea gpiod zmq)
-
-set_target_properties(control_program PROPERTIES
-        INSTALL_RPATH "/opt/mandeye/lib"
-        BUILD_WITH_INSTALL_RPATH TRUE
-)
 
 add_executable(led_demo code/led_demo.cpp code/gpios.cpp)
 set(CMAKE_CXX_LINK_FLAGS "${CMAKE_CXX_LINK_FLAGS}")
@@ -171,11 +97,15 @@ target_link_libraries(button_demo gpiod pthread)
 install(TARGETS control_program led_demo fake_pps button_demo
         RUNTIME DESTINATION /opt/mandeye/)
 
+add_subdirectory(extras/libcamera)
 install(FILES packing/helpers.sh DESTINATION /opt/mandeye/)
 install(FILES packing/helpers.sh DESTINATION /opt/mandeye/)
 install(FILES packing/services/mandeye_controller.service  DESTINATION /usr/lib/systemd/system)
 install(FILES packing/services/mandeye_fake_pps.service  DESTINATION /usr/lib/systemd/system)
-
+install(FILES packing/services/mandeye_phc2sys-gm-eth0.service DESTINATION /usr/lib/systemd/system)
+install(FILES packing/services/mandeye_ptp4l-gm-eth0.service DESTINATION /usr/lib/systemd/system)
+install(FILES packing/config/gm-l2.conf DESTINATION /opt/mandeye/)
+install(FILES packing/check_services.sh DESTINATION /opt/mandeye/)
 # Packaging
 set(CPACK_GENERATOR "DEB")
 set(CPACK_PACKAGE_NAME "mandeye-multisensor")

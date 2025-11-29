@@ -7,7 +7,7 @@ After=multi-user.target
 #Environment=MANDEYE_DISABLE_BUZZER=0
 
 User=pi
-ExecStartPre=/bin/sleep 20
+ExecStartPre=/bin/sleep 35
 ExecStart=/opt/mandeye/control_program
 Restart=always
 
