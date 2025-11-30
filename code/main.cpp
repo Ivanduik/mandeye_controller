@@ -1,4 +1,4 @@
-
+#include "robosense_airy_lidar.h"
 #include <chrono>
 #include <json.hpp>
 #include <ostream>
@@ -33,7 +33,7 @@ namespace mandeye {
 std::atomic<bool> isRunning{true};
 std::atomic<bool> isLidarError{false};
 std::mutex livoxClientPtrLock;
-std::shared_ptr<LivoxClient> livoxCLientPtr;
+std::shared_ptr<void> livoxCLientPtr;
 std::shared_ptr<GNSSClient> gnssClientPtr;
 
 std::shared_ptr<FileSystemClient> fileSystemClientPtr;
@@ -806,42 +806,49 @@ int main(int argc, char** argv)
 	});
 
 	mandeye::fileSystemClientPtr = std::make_shared<mandeye::FileSystemClient>(utils::getEnvString("MANDEYE_REPO", MANDEYE_REPO));
-	std::thread thLivox([&]() {
-		{
-			std::lock_guard<std::mutex> l1(mandeye::livoxClientPtrLock);
-			mandeye::livoxCLientPtr = std::make_shared<mandeye::LivoxClient>();
-		}
-		if(!mandeye::livoxCLientPtr->startListener(utils::getEnvString("MANDEYE_LIVOX_LISTEN_IP", MANDEYE_LIVOX_LISTEN_IP))){
-			mandeye::isLidarError.store(true);
-		}
+std::thread thLivox([&]() {
+    std::string lidar_type = utils::getEnvString("MANDEYE_LIDAR_TYPE", "livox");
 
-		// intialize in this thread to prevent initialization fiasco
-        const std::string portName = hardware::GetGNSSPort();
-		const auto baud = hardware::GetGNSSBaudrate();
-        if (!portName.empty())
-        {
-            mandeye::gnssClientPtr = std::make_shared<mandeye::GNSSClient>();
-            mandeye::gnssClientPtr->SetTimeStampProvider(mandeye::livoxCLientPtr);
-            mandeye::gnssClientPtr->startListener(portName, baud);
-
-			// set callback
-			mandeye::gnssClientPtr->setDataCallback( [&](const minmea_sentence_gga& gga)
-			{
-				if(mandeye::gpioClientPtr && gga.fix_quality > 0 && gga.satellites_tracked > 5 && !mandeye::disableBuzzer ) // if any fix quality is available
-				{
-					std::lock_guard<std::mutex> l2(mandeye::gpioClientPtrLock);
-					mandeye::gpioClientPtr->setLed(hardware::LED::BUZZER, true);
-					std::this_thread::sleep_for(std::chrono::milliseconds(10));
-					mandeye::gpioClientPtr->setLed(hardware::LED::BUZZER, false);
-				}
-			});
-
+    if (lidar_type == "robosense_airy" || lidar_type == "airy" || lidar_type == "rs_airy") {
+        auto airy = std::make_shared<RoboSenseAiryLidar>();
+        livoxCLientPtr = airy; // совместимо, потому что методы те же
+        std::cout << "[Main] Запущен RoboSense Airy" << std::endl;
+        if (!airy->startListener(utils::getEnvString("MANDEYE_LIVOX_LISTEN_IP", MANDEYE_LIVOX_LISTEN_IP))) {
+            mandeye::isLidarError.store(true);
         }
-		// start zeromq publisher
-		mandeye::publisherPtr = std::make_shared<mandeye::Publisher>();
-		mandeye::publisherPtr->SetTimeStampProvider(mandeye::livoxCLientPtr);
+    } else {
+        auto livox = std::make_shared<LivoxClient>();
+        livoxCLientPtr = livox;
+        std::cout << "[Main] Запущен Livox Mid-360" << std::endl;
+        if (!livox->startListener(utils::getEnvString("MANDEYE_LIVOX_LISTEN_IP", MANDEYE_LIVOX_LISTEN_IP))) {
+            mandeye::isLidarError.store(true);
+        }
+    }
 
-	});
+    // GNSS и Publisher — оставляем как есть (для Airy SetTimeStampProvider не нужен, но можно оставить — Airy игнорирует)
+    const std::string portName = hardware::GetGNSSPort();
+    const auto baud = hardware::GetGNSSBaudrate();
+    if (!portName.empty())
+    {
+        mandeye::gnssClientPtr = std::make_shared<mandeye::GNSSClient>();
+        mandeye::gnssClientPtr->SetTimeStampProvider(livoxCLientPtr); // работает и с Airy (метод пустой)
+        mandeye::gnssClientPtr->startListener(portName, baud);
+
+        mandeye::gnssClientPtr->setDataCallback( [&](const minmea_sentence_gga& gga)
+        {
+            if(mandeye::gpioClientPtr && gga.fix_quality > 0 && gga.satellites_tracked > 5 && !mandeye::disableBuzzer )
+            {
+                std::lock_guard<std::mutex> l2(mandeye::gpioClientPtrLock);
+                mandeye::gpioClientPtr->setLed(hardware::LED::BUZZER, true);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                mandeye::gpioClientPtr->setLed(hardware::LED::BUZZER, false);
+            }
+        });
+    }
+
+    mandeye::publisherPtr = std::make_shared<mandeye::Publisher>();
+    mandeye::publisherPtr->SetTimeStampProvider(livoxCLientPtr); // тоже работает с Airy
+});
 
 
 
